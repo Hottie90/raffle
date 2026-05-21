@@ -172,7 +172,7 @@ function pthLen(pts){var l=0;for(var i=1;i<pts.length;i++){var dx=pts[i][0]-pts[
 
 // ══ 브로드캐스트 ══════════════════════════════════════════
 function bcast() {
-  MQ.pub(tState(), JSON.stringify({ ph:ST.ph, parts:ST.parts, winners:ST.winners, slots:ST.slots, locked:ST.locked, ladderN:ST.ladderN, ladderOrder:ST.ladderOrder, ladderHs:ST.ladderHs, ladderDests:ST.ladderDests, ladderWdc:ST.ladderWdc, numWin:ST.numWin }));
+  MQ.pub(tState(), JSON.stringify({ ts:Date.now(), ph:ST.ph, parts:ST.parts, winners:ST.winners, slots:ST.slots, locked:ST.locked, ladderN:ST.ladderN, ladderOrder:ST.ladderOrder, ladderHs:ST.ladderHs, ladderDests:ST.ladderDests, ladderWdc:ST.ladderWdc, numWin:ST.numWin }));
 }
 
 // ══ MQTT 이벤트 콜백 ═════════════════════════════════════
@@ -191,8 +191,12 @@ function onMQReady() {
         }
       } catch(e) {}
     });
-    // 2초마다 상태 재브로드캐스트 (늦게 접속한 참가자 대응)
-    setInterval(function(){ if(role==='host') bcast(); }, 2000);
+    // 2초마다 상태 재브로드캐스트 (draw/ladder 중에는 스킵하여 참가자 SVG 보호)
+    setInterval(function(){
+      if(role!=='host') return;
+      if(ST.ph==='draw'||ST.ph==='ladder') return; // 애니 중 재브로드캐스트 금지
+      bcast();
+    }, 2000);
     bcast();
   } else if (role === 'part') {
     MQ.sub(tState(), function(payload) {
@@ -567,10 +571,31 @@ function startPartSlot(){
   },170);
 }
 
-// ── 참가자 상태 적용 (단일 진입점) ──
-var _prevPh='wait';
+// // 쌍가자 상태 적용 (단일 진입점) ──
+var _prevPh='wait', _lastTs=0, _ladderAnimating=false, _pendingDone=null;
 function applyState(m){
-  _prevPh=ST.ph;
+  // 1. 타임스탬프 기반 순서 보정 (오래된 메시지 무시)
+  var ts=m.ts||0;
+  if(ts && ts<_lastTs) return;
+  if(ts) _lastTs=ts;
+
+  var prev=ST.ph;
+
+  // 2. ladder 애니 진행 중 → SVG 재렌더 착지
+  if(_ladderAnimating){
+    if(m.ph==='done'){ _pendingDone=m; return; }
+    if(m.ph==='ladder'){
+      // 같은 ladder 상태 재수신 → 데이터만 갱신, paint() 호출 금지
+      if(m.numWin) ST.numWin=m.numWin;
+      return;
+    }
+  }
+
+  // 3. wait 상태에서 done 수신 → 이전 게임 잔재, 무시
+  if(m.ph==='done' && prev==='wait') return;
+
+  // 4. 상태 전체 업데이트
+  _prevPh=prev;
   ST={
     ph:m.ph,
     parts:m.parts||[],
@@ -584,13 +609,13 @@ function applyState(m){
     ladderDests:m.ladderDests||null,
     ladderWdc:m.ladderWdc||null
   };
-  if(m.ph==='done'&&_prevPh==='ladder'&&_ladderAnimating){_pendingDone=m;return;}
+
   paint();
-  if(m.ph==='draw'&&_prevPh!=='draw'){startPartSlot();}
-  if(m.ph==='ladder'&&_prevPh!=='ladder'){setTimeout(startLadderAnim,200);}
-  if(m.ph==='done'&&(_prevPh==='draw'||_prevPh==='ladder')){clearInterval(_partSlotTim);}
+
+  if(m.ph==='draw' && prev!=='draw'){ startPartSlot(); }
+  if(m.ph==='ladder' && prev!=='ladder'){ setTimeout(startLadderAnim,200); }
+  if(m.ph==='done' && (prev==='draw'||prev==='ladder')){ clearInterval(_partSlotTim); }
 }
-var _ladderAnimating=false,_pendingDone=null;
 function setNumWin(n){ST=merge(ST,{numWin:n});bcast();paint();}
 function goMethod() {
   if (ST.parts.length < ST.numWin) return;
