@@ -182,23 +182,25 @@ function onMQReady() {
       try {
         var m = JSON.parse(payload);
         var n = (m.name || '').trim().slice(0, 20);
-        if (n && ST.parts.indexOf(n) < 0 && ST.ph === 'wait') {
-          ST.parts = ST.parts.concat([n]);
-          bcast(); paint();
+        if(n && ST.parts.indexOf(n)<0 && ST.ph==='wait'){
+          ST.parts=ST.parts.concat([n]);
+          bcast();paint();
+        } else if(n){
+          // 이미 등록된 참가자 재접속 → 현재 상태 즉시 재전송
+          setTimeout(bcast,300);
         }
       } catch(e) {}
     });
+    // 2초마다 상태 재브로드캐스트 (늦게 접속한 참가자 대응)
+    setInterval(function(){ if(role==='host') bcast(); }, 2000);
     bcast();
   } else if (role === 'part') {
     MQ.sub(tState(), function(payload) {
-      try {
-        var m = JSON.parse(payload);
-        ST = { ph: m.ph, parts: m.parts||[], winners: m.winners||null, slots: m.slots||['?','?','?'], locked: m.locked||[false,false,false] };
-        paint();
-      } catch(e) {}
+      try { applyState(JSON.parse(payload)); } catch(e) {}
     });
-    // 참가자가 참여 알림 전송
+    // 참가자가 참여 알림 전송 (2회 재시도로 안정성 확보)
     MQ.pub(tJoin(), JSON.stringify({ name: myName }));
+    setTimeout(function(){ MQ.pub(tJoin(), JSON.stringify({ name: myName })); }, 1500);
   }
   paint();
 }
@@ -230,6 +232,7 @@ function doRaffle(method) {
           clearInterval(bcastTim);
           ST = merge(ST, {ph:'done', winners:pendW});
           bcast(); paint();
+          setTimeout(bcast,700); setTimeout(bcast,1800);
         } else {
           bcast();
           slotTim = setInterval(function(){
@@ -542,12 +545,43 @@ function startPartSlot(){
   if(!ST.parts||ST.parts.length===0)return;
   _partSlotTim=setInterval(function(){
     if(ST.ph!=='draw'){clearInterval(_partSlotTim);return;}
-    var ns=ST.slots.map(function(s,i){
-      return ST.locked[i]?s:ST.parts[Math.floor(Math.random()*ST.parts.length)]||'?';
-    });
-    ST=merge(ST,{slots:ns});
-    paint();
+    // locked 슬롯은 고정, 나머지만 랜덤 spin
+    var ns=ST.slots.slice();
+    var changed=false;
+    for(var ii=0;ii<ns.length;ii++){
+      if(!ST.locked[ii]){
+        ns[ii]=ST.parts[Math.floor(Math.random()*ST.parts.length)]||'?';
+        changed=true;
+      }
+    }
+    if(changed){
+      ST.slots=ns; // merge 대신 직접 수정으로 locked/numWin 등 유지
+      paint();
+    }
   },170);
+}
+
+// ── 참가자 상태 적용 (단일 진입점) ──
+var _prevPh='wait';
+function applyState(m){
+  _prevPh=ST.ph;
+  ST={
+    ph:m.ph,
+    parts:m.parts||[],
+    winners:m.winners||null,
+    numWin:m.numWin||3,
+    slots:m.slots||['?','?','?'],
+    locked:m.locked||[false,false,false],
+    ladderN:m.ladderN||null,
+    ladderOrder:m.ladderOrder||null,
+    ladderHs:m.ladderHs||null,
+    ladderDests:m.ladderDests||null,
+    ladderWdc:m.ladderWdc||null
+  };
+  paint();
+  if(m.ph==='draw'&&_prevPh!=='draw'){startPartSlot();}
+  if(m.ph==='ladder'&&_prevPh!=='ladder'){setTimeout(startLadderAnim,200);}
+  if(m.ph==='done'&&(_prevPh==='draw'||_prevPh==='ladder')){clearInterval(_partSlotTim);}
 }
 function setNumWin(n){ST=merge(ST,{numWin:n});bcast();paint();}
 function goMethod() {
