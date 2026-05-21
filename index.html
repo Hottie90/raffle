@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>평택생산팀 회식 추첨기</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;background:#F4F6FB;min-height:100vh}
+.wrap{max-width:480px;margin:0 auto;padding:14px}
+.top{background:#073674;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+.card{background:#fff;border-radius:14px;border:1px solid #E8EDF5;padding:16px;margin-bottom:12px;box-shadow:0 2px 10px rgba(7,54,116,.07)}
+.sec{font-size:11px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
+.inp{font-family:inherit;font-size:15px;padding:11px 13px;border:1.5px solid #E2E8F0;border-radius:8px;outline:none;width:100%;background:#fff;color:#1A2A4A}
+.inp:focus{border-color:#073674}
+.btn-gold{font-family:inherit;background:#F59E0B;color:#1a1000;border:none;border-radius:10px;padding:13px;font-size:16px;font-weight:900;width:100%;cursor:pointer;display:block;margin-bottom:0}
+.btn-gold:disabled{background:#CBD5E1;color:#fff;cursor:not-allowed}
+.btn-out{font-family:inherit;background:transparent;border:1px solid #CBD5E1;color:#64748B;border-radius:8px;padding:10px;font-size:13px;width:100%;cursor:pointer;margin-top:10px;display:block}
+.chip{display:inline-flex;align-items:center;gap:5px;background:#F4F6FB;border:1px solid #E8EDF5;border-radius:20px;padding:4px 10px 4px 4px;font-size:12.5px}
+.num{width:20px;height:20px;border-radius:50%;background:#073674;color:#fff;font-size:10px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.mcard{cursor:pointer;transition:.13s}
+.mcard:active,.mcard:hover{border-color:#073674!important;background:#F4F6FB!important}
+.slot-box{flex:1;border-radius:12px;padding:12px 6px;text-align:center;transition:background .5s,box-shadow .5s}
+.err{color:#EF4444;font-size:12.5px;margin-top:8px;display:none}
+.footer{text-align:center;padding:16px 14px;font-size:11px;color:#94A3B8;border-top:1px solid #E8EDF5;background:#F4F6FB}
+.dot-ok{color:#16A34A;font-size:11px}
+.dot-wait{color:#F59E0B;font-size:11px}
+</style>
+</head>
+<body>
+
+<!-- 정적 초기 화면 (JS 없이도 표시됨) -->
+<div id="app">
+  <div style="min-height:100vh;display:flex;flex-direction:column">
+    <div style="background:#073674;padding:18px 16px 24px;text-align:center">
+      <div style="font-size:32px;margin-bottom:8px">🎊</div>
+      <div style="color:#fff;font-weight:900;font-size:18px">평택생산팀 회식 이벤트</div>
+      <div style="color:rgba(255,255,255,.5);font-size:11px;margin-top:4px">2026년 상반기</div>
+    </div>
+    <div style="flex:1;padding:16px;display:flex;flex-direction:column;gap:12px;max-width:480px;width:100%;margin:0 auto">
+      <div onclick="showHostLogin()" class="card mcard" style="border:1px solid #E8EDF5;padding:20px">
+        <div style="font-size:38px;margin-bottom:10px">👑</div>
+        <div style="font-weight:900;color:#073674;font-size:17px;margin-bottom:4px">진행자 모드</div>
+        <div style="color:#64748B;font-size:13px;line-height:1.55">세션을 생성하고 추첨을 진행합니다<br><b style="color:#073674">비밀번호가 필요합니다</b></div>
+      </div>
+      <div onclick="showJoinForm()" class="card mcard" style="border:1px solid #E8EDF5;padding:20px">
+        <div style="font-size:38px;margin-bottom:10px">📱</div>
+        <div style="font-weight:900;color:#073674;font-size:17px;margin-bottom:4px">참가자로 참여하기</div>
+        <div style="color:#64748B;font-size:13px;line-height:1.55">세션 코드 입력 후 이름 등록<br>추첨 진행 및 결과를 함께 확인</div>
+      </div>
+    </div>
+    <div class="footer">Made by 곽찬호(6101930) 책임매니저 | 평택생산팀</div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ══ 설정 ═════════════════════════════════════════════════
+var CFG = { hostPw: '1234', numWin: 3 };
+var NAVY='#073674', GOLD='#F59E0B';
+var WC=['#F59E0B','#16A34A','#EF4444'], WL=['🥇 1등','🥈 2등','🥉 3등'], BD=['#F59E0B','#94A3B8','#CD7F32'];
+var FOOTER='<div class="footer">Made by 곽찬호(6101930) 책임매니저 | 평택생산팀</div>';
+
+// ══ MQTT 클라이언트 (HiveMQ 공용 브로커, 인증 불필요) ════
+var MQ = {
+  ws: null, subs: {}, pid: 1, pingTimer: null, reconTimer: null,
+  ready: false, clientId: 'rf_' + Math.random().toString(36).slice(2, 10),
+
+  _enc: function(s) {
+    var b = Array.from(new TextEncoder().encode(s));
+    return [b.length >> 8, b.length & 0xFF].concat(b);
+  },
+  _len: function(n) {
+    var b = [];
+    do { var x = n % 128; n = (n - x) / 128; if (n > 0) x |= 0x80; b.push(x); } while (n > 0);
+    return b;
+  },
+  _pktConnect: function() {
+    var vh = this._enc('MQTT').concat([4, 2, 0, 60]);
+    var pl = this._enc(this.clientId);
+    var rl = this._len(vh.length + pl.length);
+    return new Uint8Array([0x10].concat(rl, vh, pl));
+  },
+  _pktSub: function(topic) {
+    var t = this._enc(topic);
+    var vh = [this.pid >> 8, this.pid & 0xFF]; this.pid++;
+    var pl = t.concat([0]);
+    var rl = this._len(vh.length + pl.length);
+    return new Uint8Array([0x82].concat(rl, vh, pl));
+  },
+  _pktPub: function(topic, msg) {
+    var t = this._enc(topic);
+    var m = Array.from(new TextEncoder().encode(msg));
+    var rl = this._len(t.length + m.length);
+    return new Uint8Array([0x30].concat(rl, t, m));
+  },
+  _parsePub: function(d) {
+    var i = 1, rl = 0, mult = 1;
+    do { rl += (d[i] & 127) * mult; mult *= 128; } while (d[i++] & 128);
+    var tl = (d[i] << 8) | d[i + 1]; i += 2;
+    var topic = new TextDecoder().decode(d.slice(i, i + tl)); i += tl;
+    var payload = new TextDecoder().decode(d.slice(i));
+    return { topic: topic, payload: payload };
+  },
+
+  connect: function(onReady) {
+    var self = this;
+    clearTimeout(this.reconTimer);
+    try {
+      this.ws = new WebSocket('wss://broker.hivemq.com:8884/mqtt', ['mqtt']);
+      this.ws.binaryType = 'arraybuffer';
+      this.ws.onopen = function() { self.ws.send(self._pktConnect()); };
+      this.ws.onmessage = function(e) {
+        var d = new Uint8Array(e.data);
+        var type = (d[0] >> 4) & 0x0F;
+        if (type === 2) { // CONNACK
+          self.ready = true;
+          self.pingTimer = setInterval(function() {
+            if (self.ws && self.ws.readyState === 1) self.ws.send(new Uint8Array([0xC0, 0x00]));
+          }, 25000);
+          if (onReady) onReady();
+          if (typeof onMQReady === 'function') onMQReady();
+        } else if (type === 3) { // PUBLISH
+          var p = self._parsePub(d);
+          if (self.subs[p.topic]) self.subs[p.topic](p.payload);
+        }
+      };
+      this.ws.onclose = function() {
+        self.ready = false;
+        clearInterval(self.pingTimer);
+        if (typeof onMQDisconnect === 'function') onMQDisconnect();
+        self.reconTimer = setTimeout(function() { self.connect(); }, 4000);
+      };
+      this.ws.onerror = function() { self.ready = false; };
+    } catch(e) { this.ready = false; }
+  },
+
+  sub: function(topic, fn) {
+    this.subs[topic] = fn;
+    if (this.ws && this.ws.readyState === 1) this.ws.send(this._pktSub(topic));
+  },
+  pub: function(topic, msg) {
+    if (this.ws && this.ws.readyState === 1) this.ws.send(this._pktPub(topic, msg));
+  }
+};
+
+// ══ 앱 상태 ══════════════════════════════════════════════
+var role = null, code = '', myName = '';
+var ST = { ph: 'wait', parts: [], winners: null, slots: ['?','?','?'], locked: [false,false,false] };
+var pendW = null, slotTim = null, bcastTim = null;
+
+// MQTT 토픽
+function tJoin()  { return 'raffle/' + code + '/join'; }
+function tState() { return 'raffle/' + code + '/state'; }
+
+// ══ 유틸 ═════════════════════════════════════════════════
+function sh(a) { var b=a.slice(); for(var i=b.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=b[i];b[i]=b[j];b[j]=t;} return b; }
+function rnd() { return Math.random().toString(36).slice(2,8).toUpperCase(); }
+function esc(s) { return String(s||'').replace(/[&<>"']/g,function(m){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
+function get(id) { return document.getElementById(id); }
+function merge(a,b) { var r={}; for(var k in a) r[k]=a[k]; for(var k in b) r[k]=b[k]; return r; }
+
+// ══ 브로드캐스트 ══════════════════════════════════════════
+function bcast() {
+  MQ.pub(tState(), JSON.stringify({ ph:ST.ph, parts:ST.parts, winners:ST.winners, slots:ST.slots, locked:ST.locked }));
+}
+
+// ══ MQTT 이벤트 콜백 ═════════════════════════════════════
+function onMQReady() {
+  if (role === 'host') {
+    MQ.sub(tJoin(), function(payload) {
+      try {
+        var m = JSON.parse(payload);
+        var n = (m.name || '').trim().slice(0, 20);
+        if (n && ST.parts.indexOf(n) < 0 && ST.ph === 'wait') {
+          ST.parts = ST.parts.concat([n]);
+          bcast(); paint();
+        }
+      } catch(e) {}
+    });
+    bcast();
+  } else if (role === 'part') {
+    MQ.sub(tState(), function(payload) {
+      try {
+        var m = JSON.parse(payload);
+        ST = { ph: m.ph, parts: m.parts||[], winners: m.winners||null, slots: m.slots||['?','?','?'], locked: m.locked||[false,false,false] };
+        paint();
+      } catch(e) {}
+    });
+    // 참가자가 참여 알림 전송
+    MQ.pub(tJoin(), JSON.stringify({ name: myName }));
+  }
+  paint();
+}
+function onMQDisconnect() { paint(); }
+
+// ══ 추첨 ═════════════════════════════════════════════════
+function doRaffle(method) {
+  var winners = sh(ST.parts.slice()).slice(0, CFG.numWin);
+  if (method === 'instant') {
+    ST = { ph:'done', parts:ST.parts, winners:winners, slots:winners.slice(), locked:[true,true,true] };
+    bcast(); paint();
+  } else {
+    pendW = winners;
+    ST = merge(ST, { ph:'draw', winners:null, slots:['?','?','?'], locked:[false,false,false] });
+    bcast(); paint();
+    clearInterval(slotTim); clearInterval(bcastTim);
+    slotTim = setInterval(function() {
+      var ns = ST.slots.map(function(s,i){ return ST.locked[i]?s:(ST.parts[Math.floor(Math.random()*ST.parts.length)]||'?'); });
+      ST = merge(ST, {slots:ns}); paint();
+    }, 110);
+    bcastTim = setInterval(function(){ if(ST.ph==='draw') bcast(); }, 300);
+    [2200, 4400, 6600].forEach(function(delay, i) {
+      setTimeout(function() {
+        clearInterval(slotTim);
+        var nl=ST.locked.slice(); nl[i]=true;
+        var ns=ST.slots.slice(); ns[i]=pendW[i];
+        ST = merge(ST, {slots:ns, locked:nl});
+        if (i === 2) {
+          clearInterval(bcastTim);
+          ST = merge(ST, {ph:'done', winners:pendW});
+          bcast(); paint();
+        } else {
+          bcast();
+          slotTim = setInterval(function(){
+            var ns2=ST.slots.map(function(s,j){return ST.locked[j]?s:(ST.parts[Math.floor(Math.random()*ST.parts.length)]||'?');});
+            ST=merge(ST,{slots:ns2}); paint();
+          }, 110);
+        }
+        paint();
+      }, delay);
+    });
+  }
+}
+
+function doReset() {
+  clearInterval(slotTim); clearInterval(bcastTim); pendW=null;
+  ST = {ph:'wait',parts:[],winners:null,slots:['?','?','?'],locked:[false,false,false]};
+  bcast(); paint();
+}
+
+// ══ 연결 상태 표시 ════════════════════════════════════════
+function dot() {
+  return MQ.ready
+    ? '<span class="dot-ok">● 연결됨</span>'
+    : '<span class="dot-wait">● 연결 중...</span>';
+}
+
+// ══ 렌더링 ═══════════════════════════════════════════════
+function paint() {
+  var app = get('app'); if (!app) return;
+  try {
+    if (!role) app.innerHTML = uiMain();
+    else if (role === 'host') app.innerHTML = uiHost();
+    else app.innerHTML = uiPart();
+  } catch(e) {
+    app.innerHTML = '<div style="padding:20px;color:#EF4444">오류: ' + e.message + '</div>';
+  }
+}
+
+// ── 메인 ──
+function uiMain() {
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    + '<div style="background:'+NAVY+';padding:18px 16px 24px;text-align:center">'
+    + '<div style="font-size:32px;margin-bottom:8px">🎊</div>'
+    + '<div style="color:#fff;font-weight:900;font-size:18px">평택생산팀 회식 이벤트</div>'
+    + '<div style="color:rgba(255,255,255,.5);font-size:11px;margin-top:4px">2026년 상반기</div></div>'
+    + '<div style="flex:1;padding:16px;display:flex;flex-direction:column;gap:12px;max-width:480px;width:100%;margin:0 auto">'
+    + '<div onclick="showHostLogin()" class="card mcard" style="border:1px solid #E8EDF5;padding:20px">'
+    + '<div style="font-size:38px;margin-bottom:10px">👑</div>'
+    + '<div style="font-weight:900;color:'+NAVY+';font-size:17px;margin-bottom:4px">진행자 모드</div>'
+    + '<div style="color:#64748B;font-size:13px;line-height:1.55">세션을 생성하고 추첨을 진행합니다<br><b style="color:'+NAVY+'">비밀번호가 필요합니다</b></div></div>'
+    + '<div onclick="showJoinForm()" class="card mcard" style="border:1px solid #E8EDF5;padding:20px">'
+    + '<div style="font-size:38px;margin-bottom:10px">📱</div>'
+    + '<div style="font-weight:900;color:'+NAVY+';font-size:17px;margin-bottom:4px">참가자로 참여하기</div>'
+    + '<div style="color:#64748B;font-size:13px;line-height:1.55">세션 코드 입력 후 이름 등록<br>추첨 진행 및 결과를 함께 확인</div></div>'
+    + '</div>' + FOOTER + '</div>';
+}
+
+// ── 진행자 ──
+function uiHost() {
+  if (ST.ph==='wait') return uiHostWait();
+  if (ST.ph==='method') return uiMethod(true);
+  if (ST.ph==='draw') return uiSlot(true);
+  if (ST.ph==='done') return uiDone(true);
+  return '';
+}
+
+function uiHostWait() {
+  var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=' + encodeURIComponent(code) + '&color=073674&bgcolor=ffffff';
+  var chips = ST.parts.length === 0
+    ? '<span style="font-size:13px;color:#CBD5E1;padding:4px 0">참가자 대기 중...</span>'
+    : ST.parts.map(function(n,i){ return '<span class="chip"><span class="num">'+(i+1)+'</span>'+esc(n)+'</span>'; }).join('');
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">👑 진행자 모드</span>'+dot()+'</div>'
+    + '<div class="wrap" style="flex:1">'
+    + '<div class="card" style="display:flex;gap:14px;align-items:center">'
+    + '<div style="flex:1"><div class="sec">세션 코드 — 참가자에게 공유</div>'
+    + '<div style="font-size:38px;font-weight:900;color:'+NAVY+';letter-spacing:5px;font-family:monospace">'+code+'</div>'
+    + '<div style="font-size:11.5px;color:#64748B;margin-top:8px;line-height:1.6">QR 스캔 또는 코드 직접 입력</div></div>'
+    + '<div style="flex-shrink:0;text-align:center"><img src="'+qr+'" width="80" height="80" style="border-radius:8px;display:block" onerror="this.style.display=\'none\'">'
+    + '<div style="font-size:10px;color:#94A3B8;margin-top:3px">QR 스캔</div></div></div>'
+    + '<div class="card"><div class="sec">참가자 목록 ('+ST.parts.length+'명)</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:7px;min-height:36px">'+chips+'</div></div>'
+    + (ST.parts.length < 3 ? '<p style="text-align:center;font-size:12.5px;color:#94A3B8;margin-bottom:10px">최소 3명 이상 참가해야 추첨 가능</p>' : '')
+    + '<button onclick="goMethod()" class="btn-gold"'+(ST.parts.length<3?' disabled':'')+(ST.parts.length<3?' style="background:#CBD5E1;color:#fff;cursor:not-allowed"':'')+'>추첨 방식 선택 →</button>'
+    + '</div>' + FOOTER + '</div>';
+}
+
+// ── 방식 선택 ──
+function uiMethod(isHost) {
+  var body = isHost
+    ? '<div onclick="doRaffle(\'slot\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">🎰</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">슬롯머신 추첨</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">슬롯이 돌아가며<br>순차적으로 당첨자 발표</div></div></div>'
+      + '<div onclick="doRaffle(\'instant\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">⚡</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">즉시 추첨</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">바로 당첨자를 결정하고<br>모두에게 발표합니다</div></div></div>'
+    : '<div class="card" style="text-align:center;padding:28px"><div style="font-size:42px;margin-bottom:14px">🎯</div><div style="font-weight:700;color:'+NAVY+';font-size:16px;margin-bottom:6px">추첨 방식 선택 중...</div><div style="font-size:13px;color:#64748B">진행자가 선택하면 자동으로 시작됩니다</div></div>';
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+(isHost?'👑':'📱')+' 추첨 방식</span>'+dot()+'</div>'
+    + '<div class="wrap" style="flex:1"><div style="text-align:center;padding:14px 0 18px"><div style="font-weight:900;font-size:17px;color:'+NAVY+'">참가자 '+ST.parts.length+'명 중 3명 추첨</div></div>'
+    + body + '</div>' + FOOTER + '</div>';
+}
+
+// ── 슬롯 ──
+function uiSlot(isHost) {
+  var slots = ST.slots.map(function(s,i){
+    var lk=ST.locked[i];
+    return '<div class="slot-box" style="background:'+(lk?WC[i]:NAVY)+';box-shadow:'+(lk?'0 0 20px '+WC[i]+'80':'none')+'">'
+      + '<div style="color:rgba(255,255,255,.55);font-size:11px;margin-bottom:6px">'+WL[i]+'</div>'
+      + '<div style="color:#fff;font-weight:900;font-size:13px;min-height:40px;display:flex;align-items:center;justify-content:center;word-break:break-all">'+esc(s)+'</div>'
+      + (lk?'<div style="color:rgba(255,255,255,.85);font-size:11px;margin-top:5px">🎊 당첨!</div>':'')
+      + '</div>';
+  }).join('');
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+(isHost?'👑':'📱')+' 🎰 추첨 중</span>'+dot()+'</div>'
+    + '<div class="wrap" style="flex:1">'
+    + '<div style="text-align:center;font-size:14px;color:#64748B;margin-bottom:14px;padding-top:4px">당첨자 발표 중... ✨</div>'
+    + '<div style="display:flex;gap:10px;margin-bottom:14px">'+slots+'</div>'
+    + '<div style="background:'+NAVY+';border-radius:10px;padding:11px;text-align:center;color:rgba(255,255,255,.65);font-size:13px">참가자 '+ST.parts.length+'명이 함께 보고 있습니다</div>'
+    + '</div>' + FOOTER + '</div>';
+}
+
+// ── 결과 ──
+function uiDone(isHost) {
+  var w = ST.winners || [];
+  var cards = w.map(function(n,i){
+    return '<div style="background:#fff;border:2.5px solid '+BD[i]+';border-radius:14px;padding:14px 18px;display:flex;align-items:center;gap:14px;margin-bottom:10px;box-shadow:0 4px 16px '+BD[i]+'33">'
+      + '<span style="font-size:32px;flex-shrink:0">'+['🥇','🥈','🥉'][i]+'</span>'
+      + '<div style="flex:1;min-width:0"><div style="color:#64748B;font-size:11px;margin-bottom:2px">'+WL[i]+' 당첨자</div>'
+      + '<div style="font-weight:900;font-size:20px;color:'+NAVY+';overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(n)+'</div></div>'
+      + '<div style="background:'+NAVY+';color:#fff;border-radius:20px;padding:5px 12px;font-size:12px;font-weight:700;flex-shrink:0">5만원 🎁</div></div>';
+  }).join('');
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+(isHost?'👑':'📱')+' 🏆 추첨 결과</span>'+dot()+'</div>'
+    + '<div class="wrap" style="flex:1">'
+    + '<div style="text-align:center;margin-bottom:18px"><div style="font-size:50px;margin-bottom:10px">🏆</div>'
+    + '<div style="font-weight:900;font-size:20px;color:'+NAVY+';margin-bottom:4px">당첨을 축하합니다!</div>'
+    + '<div style="font-size:13px;color:#64748B">상품권 5만원 당첨자 발표 🎁</div></div>'
+    + cards
+    + '<div style="background:#EEF3FA;border-radius:10px;padding:11px 14px;text-align:center;font-size:13px;color:#64748B;border:1px solid #C5D3E8;margin-bottom:12px">🎊 평택생산팀 상반기 회식을 축하드립니다!</div>'
+    + (isHost ? '<button onclick="doReset()" class="btn-out">🔄 다시 추첨하기</button>' : '')
+    + '</div>' + FOOTER + '</div>';
+}
+
+// ── 참가자 ──
+function uiPart() {
+  if (ST.ph==='wait') return uiPartWait();
+  if (ST.ph==='method') return uiMethod(false);
+  if (ST.ph==='draw') return uiSlot(false);
+  if (ST.ph==='done') return uiDone(false);
+  return '';
+}
+
+function uiPartWait() {
+  var chips = ST.parts.length === 0
+    ? '<span style="font-size:13px;color:#CBD5E1">아직 아무도 없습니다</span>'
+    : ST.parts.map(function(n,i){
+      var me = (n === myName);
+      return '<span style="display:inline-flex;align-items:center;gap:5px;background:'+(me?NAVY:'#F4F6FB')+';border:1px solid '+(me?NAVY:'#E8EDF5')+';border-radius:20px;padding:4px 10px 4px 4px;font-size:12.5px;color:'+(me?'#fff':'#1A2A4A')+'">'
+        + '<span style="width:20px;height:20px;border-radius:50%;background:'+(me?'rgba(255,255,255,.2)':NAVY)+';color:#fff;font-size:10px;font-weight:800;display:inline-flex;align-items:center;justify-content:center">'+(i+1)+'</span>'
+        + esc(n)+(me?' ✓':'')+'</span>';
+    }).join('');
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">📱 '+esc(myName)+'</span>'+dot()+'</div>'
+    + '<div class="wrap" style="flex:1">'
+    + '<div class="card" style="text-align:center;padding:22px">'
+    + '<div style="font-size:38px;margin-bottom:12px">⏳</div>'
+    + '<div style="font-weight:700;color:'+NAVY+';font-size:15px;margin-bottom:6px">추첨을 기다리는 중...</div>'
+    + '<div style="font-size:13px;color:#64748B;line-height:1.6">진행자가 추첨을 시작하면<br>화면이 자동으로 바뀝니다</div></div>'
+    + '<div class="card"><div class="sec">현재 참가자 ('+ST.parts.length+'명)</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:7px;min-height:30px">'+chips+'</div></div>'
+    + '</div>' + FOOTER + '</div>';
+}
+
+// ══ 진행자 로그인 폼 ══════════════════════════════════════
+function showHostLogin() {
+  get('app').innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#F4F6FB">'
+    + '<div class="card" style="max-width:360px;width:100%;box-shadow:0 4px 20px rgba(7,54,116,.1)">'
+    + '<div style="text-align:center;margin-bottom:20px"><div style="font-size:40px;margin-bottom:10px">👑</div>'
+    + '<div style="font-weight:900;font-size:18px;color:'+NAVY+'">진행자 로그인</div></div>'
+    + '<label style="display:block;font-size:12px;font-weight:700;color:#64748B;margin-bottom:6px">비밀번호</label>'
+    + '<input id="pwI" type="password" class="inp" placeholder="비밀번호 입력" style="margin-bottom:4px">'
+    + '<div id="pwE" class="err">비밀번호가 틀렸습니다</div>'
+    + '<button onclick="chkPw()" class="btn-gold" style="margin-top:12px">확인</button>'
+    + '<button onclick="paint()" class="btn-out">← 뒤로</button>'
+    + '</div></div>';
+  var p = get('pwI');
+  if (p) { p.focus(); p.onkeydown = function(e){ if(e.key==='Enter') chkPw(); }; }
+}
+
+function chkPw() {
+  var v = get('pwI'); if (!v) return;
+  if (v.value === CFG.hostPw) {
+    role = 'host'; code = rnd();
+    ST = {ph:'wait',parts:[],winners:null,slots:['?','?','?'],locked:[false,false,false]};
+    MQ.connect(); paint();
+  } else {
+    var e = get('pwE'); if (e) e.style.display = 'block';
+    v.value = ''; v.focus();
+  }
+}
+
+// ══ 참가자 참여 폼 ════════════════════════════════════════
+function showJoinForm() {
+  get('app').innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#F4F6FB">'
+    + '<div class="card" style="max-width:360px;width:100%;box-shadow:0 4px 20px rgba(7,54,116,.1)">'
+    + '<div style="text-align:center;margin-bottom:20px"><div style="font-size:40px;margin-bottom:10px">📱</div>'
+    + '<div style="font-weight:900;font-size:18px;color:'+NAVY+'">참가자 참여</div></div>'
+    + '<label style="display:block;font-size:12px;font-weight:700;color:#64748B;margin-bottom:6px">세션 코드</label>'
+    + '<input id="cI" type="text" class="inp" placeholder="예: A3B2C1" maxlength="6" '
+    + 'style="font-family:monospace;font-size:22px;font-weight:900;text-align:center;letter-spacing:4px;color:'+NAVY+';margin-bottom:4px">'
+    + '<div style="font-size:11.5px;color:#94A3B8;margin-bottom:12px;text-align:center">진행자 화면의 코드를 입력하거나 QR을 스캔하세요</div>'
+    + '<label style="display:block;font-size:12px;font-weight:700;color:#64748B;margin-bottom:6px">이름</label>'
+    + '<input id="nI" type="text" class="inp" placeholder="본인 이름 입력" maxlength="20" style="margin-bottom:4px">'
+    + '<div id="jE" class="err"></div>'
+    + '<button onclick="doJoin()" class="btn-gold" style="margin-top:12px">참가하기 →</button>'
+    + '<button onclick="paint()" class="btn-out">← 뒤로</button>'
+    + '</div></div>';
+  var c = get('cI'), n = get('nI');
+  if (c) { c.oninput=function(){this.value=this.value.toUpperCase();}; c.onkeydown=function(e){if(e.key==='Enter'&&n)n.focus();}; c.focus(); }
+  if (n) { n.onkeydown=function(e){if(e.key==='Enter')doJoin();}; }
+}
+
+function doJoin() {
+  var c=get('cI'), n=get('nI'), e=get('jE');
+  if (!c||!n) return;
+  var cv=c.value.trim().toUpperCase(), nv=n.value.trim();
+  if (!cv||cv.length<4) { if(e){e.style.display='block';e.textContent='세션 코드를 입력해주세요';} return; }
+  if (!nv) { if(e){e.style.display='block';e.textContent='이름을 입력해주세요';} return; }
+  role='part'; myName=nv; code=cv;
+  MQ.connect(); paint();
+}
+
+function goMethod() {
+  if (ST.parts.length < 3) return;
+  ST = merge(ST, {ph:'method'});
+  bcast(); paint();
+}
+</script>
+</body>
+</html>
