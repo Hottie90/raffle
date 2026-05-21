@@ -23,6 +23,8 @@ body{font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;background:#F4
 .slot-box{flex:1;border-radius:12px;padding:12px 6px;text-align:center;transition:background .5s,box-shadow .5s}
 .err{color:#EF4444;font-size:12.5px;margin-top:8px;display:none}
 .footer{text-align:center;padding:16px 14px;font-size:11px;color:#94A3B8;border-top:1px solid #E8EDF5;background:#F4F6FB}
+@keyframes drawPath{to{stroke-dashoffset:0}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .dot-ok{color:#16A34A;font-size:11px}
 .dot-wait{color:#F59E0B;font-size:11px}
 </style>
@@ -46,7 +48,7 @@ body{font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;background:#F4
       <div onclick="showJoinForm()" class="card mcard" style="border:1px solid #E8EDF5;padding:20px">
         <div style="font-size:38px;margin-bottom:10px">📱</div>
         <div style="font-weight:900;color:#073674;font-size:17px;margin-bottom:4px">참가자로 참여하기</div>
-        <div style="color:#64748B;font-size:13px;line-height:1.55">세션 코드 입력 후 이름 등록<br>추첨 진행 및 결과를 함께 확인</div>
+        <div style="color:#64748B;font-size:13px;line-height:1.55">이름만 입력하면 바로 참가 완료<br>추첨 진행 및 결과를 함께 확인</div>
       </div>
     </div>
     <div class="footer">Made by 곽찬호(6101930) 책임매니저 | 평택생산팀</div>
@@ -57,6 +59,7 @@ body{font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;background:#F4
 'use strict';
 // ══ 설정 ═════════════════════════════════════════════════
 var CFG = { hostPw: '1234', numWin: 3 };
+var LR = 13;
 var NAVY='#073674', GOLD='#F59E0B';
 var WC=['#F59E0B','#16A34A','#EF4444'], WL=['🥇 1등','🥈 2등','🥉 3등'], BD=['#F59E0B','#94A3B8','#CD7F32'];
 var FOOTER='<div class="footer">Made by 곽찬호(6101930) 책임매니저 | 평택생산팀</div>';
@@ -146,7 +149,7 @@ var MQ = {
 
 // ══ 앱 상태 ══════════════════════════════════════════════
 var role = null, code = '', myName = '';
-var ST = { ph: 'wait', parts: [], winners: null, slots: ['?','?','?'], locked: [false,false,false] };
+var ST = { ph:'wait', parts:[], winners:null, slots:['?','?','?'], locked:[false,false,false], ladderN:null, ladderOrder:null, ladderHs:null, ladderDests:null, ladderWdc:null };
 var pendW = null, slotTim = null, bcastTim = null;
 
 // MQTT 토픽
@@ -159,10 +162,17 @@ function rnd() { return Math.random().toString(36).slice(2,8).toUpperCase(); }
 function esc(s) { return String(s||'').replace(/[&<>"']/g,function(m){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];}); }
 function get(id) { return document.getElementById(id); }
 function merge(a,b) { var r={}; for(var k in a) r[k]=a[k]; for(var k in b) r[k]=b[k]; return r; }
+// -- Ladder helpers --
+function bldLadder(n){var hs=[];for(var r=0;r<LR;r++){var u={};for(var c=0;c<n-1;c++){if(!u[c]&&!u[c+1]&&Math.random()<0.44){hs.push({r:r,c:c});u[c]=true;u[c+1]=true;}}}return hs;}
+function cmpDests(n,hs){var res=[];for(var s=0;s<n;s++){var col=s;for(var r=0;r<LR;r++){for(var i=0;i<hs.length;i++){if(hs[i].r===r&&(hs[i].c===col||hs[i].c===col-1)){col=(hs[i].c===col)?col+1:col-1;break;}}}res.push(col);}return res;}
+function bldPath(sc,hs,cx,ry){var p=[[cx(sc),ry(0)]];var col=sc;for(var r=0;r<LR;r++){for(var i=0;i<hs.length;i++){if(hs[i].r===r&&(hs[i].c===col||hs[i].c===col-1)){p.push([cx(col),ry(r+.5)]);col=(hs[i].c===col)?col+1:col-1;p.push([cx(col),ry(r+.5)]);break;}}p.push([cx(col),ry(r+1)]);}return p;}
+function pthD(pts){return pts.map(function(pt,i){return(i?'L':'M')+pt[0].toFixed(1)+','+pt[1].toFixed(1);}).join(' ');}
+function pthLen(pts){var l=0;for(var i=1;i<pts.length;i++){var dx=pts[i][0]-pts[i-1][0],dy=pts[i][1]-pts[i-1][1];l+=Math.sqrt(dx*dx+dy*dy);}return l;}
+
 
 // ══ 브로드캐스트 ══════════════════════════════════════════
 function bcast() {
-  MQ.pub(tState(), JSON.stringify({ ph:ST.ph, parts:ST.parts, winners:ST.winners, slots:ST.slots, locked:ST.locked }));
+  MQ.pub(tState(), JSON.stringify({ ph:ST.ph, parts:ST.parts, winners:ST.winners, slots:ST.slots, locked:ST.locked, ladderN:ST.ladderN, ladderOrder:ST.ladderOrder, ladderHs:ST.ladderHs, ladderDests:ST.ladderDests, ladderWdc:ST.ladderWdc }));
 }
 
 // ══ MQTT 이벤트 콜백 ═════════════════════════════════════
@@ -196,9 +206,9 @@ function onMQDisconnect() { paint(); }
 
 // ══ 추첨 ═════════════════════════════════════════════════
 function doRaffle(method) {
+  if(method==='ladder'){var n=ST.parts.length,order=sh(ST.parts.slice()),hs=bldLadder(n),dests=cmpDests(n,hs),allC=[];for(var _i=0;_i<n;_i++)allC.push(_i);var wdc=sh(allC).slice(0,CFG.numWin);var picked=wdc.map(function(dc){return order[dests.indexOf(dc)];});ST=merge(ST,{ph:'ladder',ladderN:n,ladderOrder:order,ladderHs:hs,ladderDests:dests,ladderWdc:wdc,winners:picked});bcast();paint();setTimeout(startLadderAnim,150);return;}
   var winners = sh(ST.parts.slice()).slice(0, CFG.numWin);
-  if (method === 'instant') {
-    ST = { ph:'done', parts:ST.parts, winners:winners, slots:winners.slice(), locked:[true,true,true] };
+  if (method === '__none__') {
     bcast(); paint();
   } else {
     pendW = winners;
@@ -235,7 +245,7 @@ function doRaffle(method) {
 
 function doReset() {
   clearInterval(slotTim); clearInterval(bcastTim); pendW=null;
-  ST = {ph:'wait',parts:[],winners:null,slots:['?','?','?'],locked:[false,false,false]};
+  ST = {ph:'wait',parts:[],winners:null,slots:['?','?','?'],locked:[false,false,false],ladderN:null,ladderOrder:null,ladderHs:null,ladderDests:null,ladderWdc:null};
   bcast(); paint();
 }
 
@@ -273,7 +283,7 @@ function uiMain() {
     + '<div onclick="showJoinForm()" class="card mcard" style="border:1px solid #E8EDF5;padding:20px">'
     + '<div style="font-size:38px;margin-bottom:10px">📱</div>'
     + '<div style="font-weight:900;color:'+NAVY+';font-size:17px;margin-bottom:4px">참가자로 참여하기</div>'
-    + '<div style="color:#64748B;font-size:13px;line-height:1.55">세션 코드 입력 후 이름 등록<br>추첨 진행 및 결과를 함께 확인</div></div>'
+    + '<div style="color:#64748B;font-size:13px;line-height:1.55">이름만 입력하면 바로 참가 완료<br>추첨 진행 및 결과를 함께 확인</div></div>'
     + '</div>' + FOOTER + '</div>';
 }
 
@@ -282,24 +292,22 @@ function uiHost() {
   if (ST.ph==='wait') return uiHostWait();
   if (ST.ph==='method') return uiMethod(true);
   if (ST.ph==='draw') return uiSlot(true);
+  if (ST.ph==='ladder') return uiLadder(true);
   if (ST.ph==='done') return uiDone(true);
   return '';
 }
 
 function uiHostWait() {
-  var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=' + encodeURIComponent(code) + '&color=073674&bgcolor=ffffff';
   var chips = ST.parts.length === 0
-    ? '<span style="font-size:13px;color:#CBD5E1;padding:4px 0">참가자 대기 중...</span>'
+    ? '<span style="font-size:13px;color:#CBD5E1;padding:4px 0">참가자 대기 중... 참가자들이 URL에 접속하면 자동으로 표시됩니다</span>'
     : ST.parts.map(function(n,i){ return '<span class="chip"><span class="num">'+(i+1)+'</span>'+esc(n)+'</span>'; }).join('');
   return '<div style="min-height:100vh;display:flex;flex-direction:column">'
     + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">👑 진행자 모드</span>'+dot()+'</div>'
     + '<div class="wrap" style="flex:1">'
-    + '<div class="card" style="display:flex;gap:14px;align-items:center">'
-    + '<div style="flex:1"><div class="sec">세션 코드 — 참가자에게 공유</div>'
-    + '<div style="font-size:38px;font-weight:900;color:'+NAVY+';letter-spacing:5px;font-family:monospace">'+code+'</div>'
-    + '<div style="font-size:11.5px;color:#64748B;margin-top:8px;line-height:1.6">QR 스캔 또는 코드 직접 입력</div></div>'
-    + '<div style="flex-shrink:0;text-align:center"><img src="'+qr+'" width="80" height="80" style="border-radius:8px;display:block" onerror="this.style.display=\'none\'">'
-    + '<div style="font-size:10px;color:#94A3B8;margin-top:3px">QR 스캔</div></div></div>'
+    + '<div class="card" style="background:#EEF3FA;border:1px solid #C5D3E8;padding:12px 16px;margin-bottom:12px">'
+    + '<div style="font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">접속 URL 공유 안내</div>'
+    + '<div style="font-size:13px;color:#073674;line-height:1.6">참가자들에게 URL을 공유하면 이름만 입력해서 바로 참가됩니다.<br>세션 코드 입력 불필요 ✅</div>'
+    + '</div>'
     + '<div class="card"><div class="sec">참가자 목록 ('+ST.parts.length+'명)</div>'
     + '<div style="display:flex;flex-wrap:wrap;gap:7px;min-height:36px">'+chips+'</div></div>'
     + (ST.parts.length < 3 ? '<p style="text-align:center;font-size:12.5px;color:#94A3B8;margin-bottom:10px">최소 3명 이상 참가해야 추첨 가능</p>' : '')
@@ -311,7 +319,7 @@ function uiHostWait() {
 function uiMethod(isHost) {
   var body = isHost
     ? '<div onclick="doRaffle(\'slot\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">🎰</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">슬롯머신 추첨</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">슬롯이 돌아가며<br>순차적으로 당첨자 발표</div></div></div>'
-      + '<div onclick="doRaffle(\'instant\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">⚡</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">즉시 추첨</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">바로 당첨자를 결정하고<br>모두에게 발표합니다</div></div></div>'
+      + '<div onclick="doRaffle(\'ladder\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">🪜</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">사다리타기</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">사다리를 타며 당첨자 결정<br>경로가 시각적으로 표시됩니다</div></div></div>'
     : '<div class="card" style="text-align:center;padding:28px"><div style="font-size:42px;margin-bottom:14px">🎯</div><div style="font-weight:700;color:'+NAVY+';font-size:16px;margin-bottom:6px">추첨 방식 선택 중...</div><div style="font-size:13px;color:#64748B">진행자가 선택하면 자동으로 시작됩니다</div></div>';
   return '<div style="min-height:100vh;display:flex;flex-direction:column">'
     + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+(isHost?'👑':'📱')+' 추첨 방식</span>'+dot()+'</div>'
@@ -355,7 +363,7 @@ function uiDone(isHost) {
     + '<div style="font-weight:900;font-size:20px;color:'+NAVY+';margin-bottom:4px">당첨을 축하합니다!</div>'
     + '<div style="font-size:13px;color:#64748B">상품권 5만원 당첨자 발표 🎁</div></div>'
     + cards
-    + '<div style="background:#EEF3FA;border-radius:10px;padding:11px 14px;text-align:center;font-size:13px;color:#64748B;border:1px solid #C5D3E8;margin-bottom:12px">🎊 평택생산팀 상반기 회식을 축하드립니다!</div>'
+    + '<div style="background:#EEF3FA;border-radius:10px;padding:11px 14px;text-align:center;font-size:13px;color:#64748B;border:1px solid #C5D3E8;margin-bottom:12px">🎊 축하드립니다!!</div>'
     + (isHost ? '<button onclick="doReset()" class="btn-out">🔄 다시 추첨하기</button>' : '')
     + '</div>' + FOOTER + '</div>';
 }
@@ -365,6 +373,7 @@ function uiPart() {
   if (ST.ph==='wait') return uiPartWait();
   if (ST.ph==='method') return uiMethod(false);
   if (ST.ph==='draw') return uiSlot(false);
+  if (ST.ph==='ladder') return uiLadder(false);
   if (ST.ph==='done') return uiDone(false);
   return '';
 }
@@ -409,7 +418,7 @@ function showHostLogin() {
 function chkPw() {
   var v = get('pwI'); if (!v) return;
   if (v.value === CFG.hostPw) {
-    role = 'host'; code = rnd();
+    role = 'host'; code = 'UNITUS';
     ST = {ph:'wait',parts:[],winners:null,slots:['?','?','?'],locked:[false,false,false]};
     MQ.connect(); paint();
   } else {
@@ -418,36 +427,98 @@ function chkPw() {
   }
 }
 
-// ══ 참가자 참여 폼 ════════════════════════════════════════
+// ══ 참가자 참여 폼 (세션코드 없음 — UNITUS 고정) ══════════
 function showJoinForm() {
   get('app').innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#F4F6FB">'
     + '<div class="card" style="max-width:360px;width:100%;box-shadow:0 4px 20px rgba(7,54,116,.1)">'
-    + '<div style="text-align:center;margin-bottom:20px"><div style="font-size:40px;margin-bottom:10px">📱</div>'
-    + '<div style="font-weight:900;font-size:18px;color:'+NAVY+'">참가자 참여</div></div>'
-    + '<label style="display:block;font-size:12px;font-weight:700;color:#64748B;margin-bottom:6px">세션 코드</label>'
-    + '<input id="cI" type="text" class="inp" placeholder="예: A3B2C1" maxlength="6" '
-    + 'style="font-family:monospace;font-size:22px;font-weight:900;text-align:center;letter-spacing:4px;color:'+NAVY+';margin-bottom:4px">'
-    + '<div style="font-size:11.5px;color:#94A3B8;margin-bottom:12px;text-align:center">진행자 화면의 코드를 입력하거나 QR을 스캔하세요</div>'
+    + '<div style="text-align:center;margin-bottom:22px">'
+    + '<div style="font-size:44px;margin-bottom:10px">📱</div>'
+    + '<div style="font-weight:900;font-size:18px;color:'+NAVY+';margin-bottom:4px">참가자 참여</div>'
+    + '<div style="font-size:13px;color:#64748B">이름을 입력하고 참가하기를 눌러주세요</div></div>'
     + '<label style="display:block;font-size:12px;font-weight:700;color:#64748B;margin-bottom:6px">이름</label>'
-    + '<input id="nI" type="text" class="inp" placeholder="본인 이름 입력" maxlength="20" style="margin-bottom:4px">'
+    + '<input id="nI" type="text" class="inp" placeholder="본인 이름 입력" maxlength="20" style="font-size:18px;font-weight:700;text-align:center;margin-bottom:4px">'
     + '<div id="jE" class="err"></div>'
-    + '<button onclick="doJoin()" class="btn-gold" style="margin-top:12px">참가하기 →</button>'
+    + '<button onclick="doJoin()" class="btn-gold" style="margin-top:14px">참가하기 →</button>'
     + '<button onclick="paint()" class="btn-out">← 뒤로</button>'
     + '</div></div>';
-  var c = get('cI'), n = get('nI');
-  if (c) { c.oninput=function(){this.value=this.value.toUpperCase();}; c.onkeydown=function(e){if(e.key==='Enter'&&n)n.focus();}; c.focus(); }
-  if (n) { n.onkeydown=function(e){if(e.key==='Enter')doJoin();}; }
+  var n = get('nI');
+  if (n) { n.focus(); n.onkeydown=function(e){if(e.key==='Enter')doJoin();}; }
 }
 
 function doJoin() {
-  var c=get('cI'), n=get('nI'), e=get('jE');
-  if (!c||!n) return;
-  var cv=c.value.trim().toUpperCase(), nv=n.value.trim();
-  if (!cv||cv.length<4) { if(e){e.style.display='block';e.textContent='세션 코드를 입력해주세요';} return; }
+  var n=get('nI'), e=get('jE');
+  if (!n) return;
+  var nv = n.value.trim();
   if (!nv) { if(e){e.style.display='block';e.textContent='이름을 입력해주세요';} return; }
-  role='part'; myName=nv; code=cv;
+  role='part'; myName=nv; code='UNITUS';
   MQ.connect(); paint();
 }
+
+
+// -- uiLadder --
+function uiLadder(isHost){
+  var n=ST.ladderN,hs=ST.ladderHs,wdc=ST.ladderWdc,order=ST.ladderOrder;
+  if(!n||!hs||!wdc||!order)return'<div class="wrap"><div class="card" style="text-align:center;padding:28px"><div style="font-size:15px;color:'+NAVY+'">\uc900\ube44 \uc911...</div></div></div>';
+  var cw=Math.min(500,Math.max(260,n*50)),ch=390,px2=28,py2=44;
+  function lx(col){return px2+col*(cw-px2*2)/Math.max(n-1,1);}
+  function ly(row){return py2+row*(ch-py2*2)/LR;}
+  var vl='',hl='',lb='',ci='';
+  for(var i=0;i<n;i++){
+    vl+='<line x1="'+lx(i).toFixed(1)+'" y1="'+py2+'" x2="'+lx(i).toFixed(1)+'" y2="'+(ch-py2)+'" stroke="#D1D5DB" stroke-width="2.5"/>';
+    var nm=order[i],nm2=nm.length>3?nm.slice(0,3)+'...':nm;
+    lb+='<text x="'+lx(i).toFixed(1)+'" y="'+(py2-14)+'" text-anchor="middle" font-size="'+(n>10?7.5:9.5)+'" fill="'+NAVY+'" font-weight="700" font-family="inherit">'+esc(nm2)+'</text>';
+    var wi=wdc.indexOf(i),isW=(wi!==-1);
+    ci+='<circle cx="'+lx(i).toFixed(1)+'" cy="'+(ch-py2+16)+'" r="13" fill="'+(isW?WC[wi]:'#F3F4F6')+'" stroke="'+(isW?WC[wi]:'#D1D5DB')+'" stroke-width="1.5"/>';
+    var sym=isW?'&#127873;':'&#10005;';
+    ci+='<text x="'+lx(i).toFixed(1)+'" y="'+(ch-py2+20)+'" text-anchor="middle" font-size="13" fill="'+(isW?'#fff':'#9CA3AF')+'" font-family="inherit">'+sym+'</text>';
+  }
+  for(var j=0;j<hs.length;j++){hl+='<line x1="'+lx(hs[j].c).toFixed(1)+'" y1="'+ly(hs[j].r+.5).toFixed(1)+'" x2="'+lx(hs[j].c+1).toFixed(1)+'" y2="'+ly(hs[j].r+.5).toFixed(1)+'" stroke="#D1D5DB" stroke-width="2.5"/>';}
+  var svg='<svg id="lsvg" width="'+cw+'" height="'+ch+'" style="border-radius:12px;background:#fff;border:1px solid #E8EDF5;display:block">'+vl+hl+lb+ci+'<g id="lpg"></g></svg>';
+  var hostIcon=isHost?'&#128081;':'&#128242;';
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    +'<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+hostIcon+' &#129692; \uc0ac\ub2e4\ub9ac\ud0c0\uae30</span>'+dot()+'</div>'
+    +'<div class="wrap" style="flex:1">'
+    +'<div style="text-align:center;font-size:13px;color:#64748B;margin-bottom:12px;padding-top:4px">&#127873; \ud45c\uc2dc 3\uacf3\uc774 \ub2f9\ucca8! \uacbd\ub85c\ub97c \ub530\ub77c \ud655\uc778\ud558\uc138\uc694</div>'
+    +'<div style="overflow-x:auto;display:flex;justify-content:center;margin-bottom:14px">'+svg+'</div>'
+    +'<div id="lrev" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>'
+    +(isHost?'<div id="lDoneBtn" style="display:none"><button onclick="hostDone()" class="btn-out">\uacb0\uacfc \ud654\uba74\uc73c\ub85c &rarr;</button></div>':'')
+    +'</div>'+FOOTER+'</div>';
+}
+// -- startLadderAnim (AD=4500ms 느린속도) --
+function startLadderAnim(){
+  var pg=document.getElementById('lpg'),ra=document.getElementById('lrev');
+  if(!pg||!ra)return;
+  var n=ST.ladderN,hs=ST.ladderHs,wdc=ST.ladderWdc,dests=ST.ladderDests,picked=ST.winners;
+  if(!n||!hs||!wdc||!dests||!picked)return;
+  var cw=Math.min(500,Math.max(260,n*50)),ch=390,px2=28,py2=44;
+  function lx(col){return px2+col*(cw-px2*2)/Math.max(n-1,1);}
+  function ly(row){return py2+row*(ch-py2*2)/LR;}
+  var AD=4500,DL=1800;
+  wdc.forEach(function(dc,i){
+    var si=dests.indexOf(dc),pts=bldPath(si,hs,lx,ly),len=Math.ceil(pthLen(pts))+10;
+    setTimeout(function(){
+      var path=document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d',pthD(pts));path.setAttribute('fill','none');
+      path.setAttribute('stroke',WC[i]);path.setAttribute('stroke-width','5');
+      path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');
+      path.setAttribute('stroke-dasharray',len);path.setAttribute('stroke-dashoffset',len);
+      path.style.animation='drawPath '+AD+'ms ease-in-out forwards';
+      pg.appendChild(path);
+      setTimeout(function(){
+        var card=document.createElement('div');
+        card.style.cssText='background:'+WC[i]+';border-radius:10px;padding:10px 16px;display:flex;align-items:center;gap:12px;animation:fadeUp .4s ease both';
+        var medal=['&#129351;','&#129352;','&#129353;'][i];
+        card.innerHTML='<span style="font-size:22px">&#127882;</span>'
+          +'<div style="flex:1"><div style="color:rgba(0,0,0,.4);font-size:10.5px;margin-bottom:1px">'+WL[i]+' \ub2f9\ucca8\uc790</div>'
+          +'<div style="font-weight:900;font-size:18px;color:'+(i===0?'#78350F':'#fff')+'">'+esc(picked[i])+'</div></div>'
+          +'<div style="font-size:12px;color:'+(i===0?'#92400E':'rgba(255,255,255,.8)')+'">\uc0c1\ud488\uad8c 5\ub9cc\uc6d0 &#127873;</div>';
+        ra.appendChild(card);
+        if(i===CFG.numWin-1){var db=document.getElementById('lDoneBtn');if(db)db.style.display='block';if(role==='host')setTimeout(hostDone,2500);}
+      },AD);
+    },i*(AD+DL));
+  });
+}
+function hostDone(){ST=merge(ST,{ph:'done'});bcast();paint();}
 
 function goMethod() {
   if (ST.parts.length < 3) return;
