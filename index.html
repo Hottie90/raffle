@@ -194,7 +194,7 @@ function onMQReady() {
     // 2초마다 상태 재브로드캐스트 (draw/ladder 중에는 스킵하여 참가자 SVG 보호)
     setInterval(function(){
       if(role!=='host') return;
-      if(ST.ph==='draw'||ST.ph==='ladder') return; // 애니 중 재브로드캐스트 금지
+      if(ST.ph==='draw'||ST.ph==='ladder'||ST.ph==='roulette') return; // 애니 중 재브로드캐스트 금지
       bcast();
     }, 2000);
     bcast();
@@ -212,6 +212,11 @@ function onMQDisconnect() { paint(); }
 
 // ══ 추첨 ═════════════════════════════════════════════════
 function doRaffle(method) {
+  if(method==='roulette'){
+    var winners=sh(ST.parts.slice()).slice(0,ST.numWin);
+    ST=merge(ST,{ph:'roulette',winners:winners});
+    bcast();paint();setTimeout(startRouletteAnim,200);return;
+  }
   if(method==='ladder'){var n=ST.parts.length,order=sh(ST.parts.slice()),hs=bldLadder(n),dests=cmpDests(n,hs),allC=[];for(var _i=0;_i<n;_i++)allC.push(_i);var wdc=sh(allC).slice(0,ST.numWin);var picked=wdc.map(function(dc){return order[dests.indexOf(dc)];});ST=merge(ST,{numWin:ST.numWin,ph:'ladder',ladderN:n,ladderOrder:order,ladderHs:hs,ladderDests:dests,ladderWdc:wdc,winners:picked});bcast();paint();setTimeout(startLadderAnim,150);return;}
   var winners = sh(ST.parts.slice()).slice(0, ST.numWin);
   if (method === '__none__') {
@@ -301,6 +306,7 @@ function uiHost() {
   if (ST.ph==='method') return uiMethod(true);
   if (ST.ph==='draw') return uiSlot(true);
   if (ST.ph==='ladder') return uiLadder(true);
+  if (ST.ph==='roulette') return uiRoulette(true);
   if (ST.ph==='done') return uiDone(true);
   return '';
 }
@@ -340,7 +346,8 @@ function uiMethod(isHost) {
   var body = isHost
     ? '<div onclick="doRaffle(\'slot\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">🎰</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">슬롯머신 추첨</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">슬롯이 돌아가며<br>순차적으로 당첨자 발표</div></div></div>'
       + '<div onclick="doRaffle(\'ladder\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">🪜</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">사다리타기</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">사다리를 타며 당첨자 결정<br>경로가 시각적으로 표시됩니다</div></div></div>'
-    : '<div class="card" style="text-align:center;padding:28px"><div style="font-size:42px;margin-bottom:14px">🎯</div><div style="font-weight:700;color:'+NAVY+';font-size:16px;margin-bottom:6px">추첨 방식 선택 중...</div><div style="font-size:13px;color:#64748B">진행자가 선택하면 자동으로 시작됩니다</div></div>';
+      + '<div onclick="doRaffle(\'roulette\')" class="card mcard" style="display:flex;align-items:center;gap:16px;border:1px solid #E8EDF5;padding:18px"><span style="font-size:40px;flex-shrink:0">🎡</span><div><div style="font-weight:800;color:'+NAVY+';font-size:16px;margin-bottom:4px">룰렛</div><div style="color:#64748B;font-size:12.5px;line-height:1.5">참가자 이름이 적힌 원판을 돌려<br>멈추는 곳의 당첨자 순차 발표</div></div></div>'
+    : '<div class="card" style="text-align:center;padding:28px"><div style="font-size:42px;margin-bottom:14px">&#127905;</div><div style="font-weight:700;color:'+NAVY+';font-size:16px;margin-bottom:6px">추첨 방식 선택 중...</div><div style="font-size:13px;color:#64748B">진행자가 선택하면 자동으로 시작됩니다</div></div>';
   return '<div style="min-height:100vh;display:flex;flex-direction:column">'
     + '<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+(isHost?'👑':'📱')+' 추첨 방식</span>'+dot()+'</div>'
     + '<div class="wrap" style="flex:1"><div style="text-align:center;padding:14px 0 18px"><div style="font-weight:900;font-size:17px;color:'+NAVY+'">참가자 '+ST.parts.length+'명 중 3명 추첨</div></div>'
@@ -394,6 +401,7 @@ function uiPart() {
   if (ST.ph==='method') return uiMethod(false);
   if (ST.ph==='draw') return uiSlot(false);
   if (ST.ph==='ladder') return uiLadder(false);
+  if (ST.ph==='roulette') return uiRoulette(false);
   if (ST.ph==='done') return uiDone(false);
   return '';
 }
@@ -546,6 +554,157 @@ function startLadderAnim(){
     },i*(AD+DL));
   });
 }
+
+// ══ 룰렛 ══════════════════════════════════════════════════
+var _rouletteAnimating=false;
+
+// 룰렛 색상 팔레트
+var RC=['#073674','#1565C0','#0288D1','#0097A7','#00796B','#2E7D32','#F57F17','#E65100','#BF360C','#880E4F','#4A148C','#1A237E'];
+
+function uiRoulette(isHost){
+  var hostIcon=isHost?'&#128081;':'&#128242;';
+  return '<div style="min-height:100vh;display:flex;flex-direction:column">'
+    +'<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+hostIcon+' &#127905; \ub8e8\ub81b</span>'+dot()+'</div>'
+    +'<div class="wrap" style="flex:1">'
+    +'<div style="display:flex;justify-content:center;margin-bottom:14px;padding-top:6px">'
+    +'<div style="position:relative;width:300px;height:300px">'
+    +'<canvas id="rwCanvas" width="300" height="300" style="border-radius:50%;display:block"></canvas>'
+    +'<div id="rwPointer" style="position:absolute;top:-14px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:12px solid transparent;border-right:12px solid transparent;border-top:24px solid #EF4444;filter:drop-shadow(0 2px 4px rgba(0,0,0,.4))"></div>'
+    +'</div></div>'
+    +'<div id="rrev" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>'
+    +(isHost?'<div id="rDoneBtn" style="display:none"><button onclick="hostRouletteDone()" class="btn-out">\uacb0\uacfc \ud654\uba74\uc73c\ub85c &rarr;</button></div>':'')
+    +'</div>'+FOOTER+'</div>';
+}
+
+function drawWheel(canvas, names, angle){
+  var ctx=canvas.getContext('2d');
+  var W=canvas.width, H=canvas.height;
+  var cx=W/2, cy=H/2, r=W/2-4;
+  var n=names.length, arc=(2*Math.PI)/n;
+  ctx.clearRect(0,0,W,H);
+
+  for(var i=0;i<n;i++){
+    var a=angle+i*arc;
+    // 부채꼴
+    ctx.beginPath();
+    ctx.moveTo(cx,cy);
+    ctx.arc(cx,cy,r,a,a+arc);
+    ctx.closePath();
+    ctx.fillStyle=RC[i%RC.length];
+    ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.3)';
+    ctx.lineWidth=1.5;
+    ctx.stroke();
+
+    // 텍스트
+    ctx.save();
+    ctx.translate(cx,cy);
+    ctx.rotate(a+arc/2);
+    ctx.textAlign='right';
+    ctx.fillStyle='#fff';
+    ctx.font='bold '+(n>10?11:13)+'px Apple SD Gothic Neo,Malgun Gothic,sans-serif';
+    ctx.shadowColor='rgba(0,0,0,0.4)';
+    ctx.shadowBlur=3;
+    var nm=names[i];
+    if(nm.length>5) nm=nm.slice(0,5)+'..';
+    ctx.fillText(nm, r-8, 5);
+    ctx.restore();
+  }
+
+  // 중심 원
+  ctx.beginPath();
+  ctx.arc(cx,cy,20,0,2*Math.PI);
+  ctx.fillStyle='#fff';
+  ctx.fill();
+  ctx.strokeStyle='#E2E8F0';
+  ctx.lineWidth=2;
+  ctx.stroke();
+}
+
+function startRouletteAnim(){
+  _rouletteAnimating=true;
+  _pendingDone=null;
+  var names=ST.parts.slice();
+  var winners=ST.winners||[];
+  var numWin=ST.numWin||1;
+  var round=0;
+  var remaining=names.slice();
+
+  function spinOne(){
+    var canvas=document.getElementById('rwCanvas');
+    if(!canvas){_rouletteAnimating=false;return;}
+
+    // 이번 라운드 당첨자 인덱스
+    var target=winners[round];
+    var tidx=remaining.indexOf(target);
+    if(tidx<0){tidx=Math.floor(Math.random()*remaining.length);}
+
+    var n=remaining.length;
+    var arc=(2*Math.PI)/n;
+    // 포인터는 top(각도 -π/2)을 가리킴
+    // 당첨 섹터의 중심이 포인터에 오도록 각도 계산
+    var targetAngle=-(Math.PI/2)-(tidx*arc+arc/2);
+    // 여러 바퀴 + 목표 각도
+    var totalSpin=(2*Math.PI*8)+targetAngle;
+    var startAngle=0;
+    var startTime=null;
+    var duration=5000+round*500; // 라운드마다 조금씩 길어짐
+
+    function easeOut(t){return 1-Math.pow(1-t,4);}
+
+    function frame(ts){
+      if(!startTime) startTime=ts;
+      var elapsed=ts-startTime;
+      var progress=Math.min(elapsed/duration,1);
+      var eased=easeOut(progress);
+      var angle=startAngle+totalSpin*eased;
+
+      var cv=document.getElementById('rwCanvas');
+      if(cv) drawWheel(cv,remaining,angle);
+
+      if(progress<1){
+        requestAnimationFrame(frame);
+      } else {
+        // 당첨 카드 표시
+        setTimeout(function(){
+          var ra=document.getElementById('rrev');
+          if(ra){
+            var card=document.createElement('div');
+            card.style.cssText='background:'+WC[round]+';border-radius:10px;padding:10px 16px;display:flex;align-items:center;gap:12px;animation:fadeUp .4s ease both';
+            card.innerHTML='<span style="font-size:24px">&#127882;</span>'
+              +'<div style="flex:1"><div style="color:rgba(0,0,0,.4);font-size:10.5px;margin-bottom:1px">'+WL[round]+' \ub2f9\ucca8\uc790</div>'
+              +'<div style="font-weight:900;font-size:18px;color:'+(round===0?'#78350F':'#fff')+'">'+esc(target)+'</div></div>'
+              +'<div style="font-size:12px;color:'+(round===0?'#92400E':'rgba(255,255,255,.8)')+'>\uc0c1\ud488\uad8c 5\ub9cc\uc6d0 &#127873;</div>';
+            ra.appendChild(card);
+          }
+
+          round++;
+          // 당첨자를 남은 목록에서 제거
+          remaining=remaining.filter(function(x){return x!==target;});
+
+          if(round<numWin){
+            // 다음 라운드
+            setTimeout(spinOne,1200);
+          } else {
+            // 전체 완료
+            var db=document.getElementById('rDoneBtn');
+            if(db) db.style.display='block';
+            _rouletteAnimating=false;
+            if(role==='host') setTimeout(hostRouletteDone,2500);
+            if(_pendingDone){var pd=_pendingDone;_pendingDone=null;setTimeout(function(){applyState(pd);},800);}
+          }
+        },600);
+      }
+    }
+    // 초기 그리기
+    drawWheel(canvas,remaining,startAngle);
+    requestAnimationFrame(frame);
+  }
+
+  spinOne();
+}
+
+function hostRouletteDone(){ST=merge(ST,{ph:'done'});bcast();setTimeout(bcast,700);paint();}
 function hostDone(){ST=merge(ST,{ph:'done'});bcast();paint();}
 
 
@@ -583,6 +742,10 @@ function applyState(m){
   var prev=ST.ph;
 
   // 2. ladder 애니 진행 중 → SVG 재렌더 착지
+  if(_rouletteAnimating){
+    if(m.ph==='done'){ _pendingDone=m; return; }
+    if(m.ph==='roulette'){ if(m.numWin) ST.numWin=m.numWin; return; }
+  }
   if(_ladderAnimating){
     if(m.ph==='done'){ _pendingDone=m; return; }
     if(m.ph==='ladder'){
@@ -615,7 +778,8 @@ function applyState(m){
 
   if(m.ph==='draw' && prev!=='draw'){ startPartSlot(); }
   if(m.ph==='ladder' && prev!=='ladder'){ setTimeout(startLadderAnim,200); }
-  if(m.ph==='done' && (prev==='draw'||prev==='ladder')){ clearInterval(_partSlotTim); }
+  if(m.ph==='roulette' && prev!=='roulette'){ setTimeout(startRouletteAnim,200); }
+  if(m.ph==='done' && (prev==='draw'||prev==='ladder'||prev==='roulette')){ clearInterval(_partSlotTim); }
 }
 function setNumWin(n){ST=merge(ST,{numWin:n});bcast();paint();}
 function goMethod() {
