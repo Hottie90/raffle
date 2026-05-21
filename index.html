@@ -218,9 +218,9 @@ function doRaffle(method) {
     slotTim = setInterval(function() {
       var ns = ST.slots.map(function(s,i){ return ST.locked[i]?s:(ST.parts[Math.floor(Math.random()*ST.parts.length)]||'?'); });
       ST = merge(ST, {slots:ns}); paint();
-    }, 110);
-    bcastTim = setInterval(function(){ if(ST.ph==='draw') bcast(); }, 300);
-    var _numWinSnap=ST.numWin;[2200,4400,6600].slice(0,_numWinSnap).forEach(function(delay, i) {
+    }, 170);
+    bcastTim = setInterval(function(){ if(ST.ph==='draw') bcast(); }, 150);
+    var _numWinSnap=ST.numWin;[4000,8500,13000].slice(0,_numWinSnap).forEach(function(delay, i) {
       setTimeout(function() {
         clearInterval(slotTim);
         var nl=ST.locked.slice(); nl[i]=true;
@@ -235,7 +235,7 @@ function doRaffle(method) {
           slotTim = setInterval(function(){
             var ns2=ST.slots.map(function(s,j){return ST.locked[j]?s:(ST.parts[Math.floor(Math.random()*ST.parts.length)]||'?');});
             ST=merge(ST,{slots:ns2}); paint();
-          }, 110);
+          }, 170);
         }
         paint();
       }, delay);
@@ -472,21 +472,21 @@ function doJoin() {
 function uiLadder(isHost){
   var n=ST.ladderN,hs=ST.ladderHs,wdc=ST.ladderWdc,order=ST.ladderOrder;
   if(!n||!hs||!wdc||!order)return'<div class="wrap"><div class="card" style="text-align:center;padding:28px"><div style="font-size:15px;color:'+NAVY+'">\uc900\ube44 \uc911...</div></div></div>';
-  var cw=Math.min(500,Math.max(260,n*50)),ch=390,px2=28,py2=44;
+  var cw=Math.min(500,Math.max(260,n*50)),ch=420,px2=28,py2=52;
   function lx(col){return px2+col*(cw-px2*2)/Math.max(n-1,1);}
   function ly(row){return py2+row*(ch-py2*2)/LR;}
   var vl='',hl='',lb='',ci='';
   for(var i=0;i<n;i++){
     vl+='<line x1="'+lx(i).toFixed(1)+'" y1="'+py2+'" x2="'+lx(i).toFixed(1)+'" y2="'+(ch-py2)+'" stroke="#D1D5DB" stroke-width="2.5"/>';
     var nm=order[i],nm2=nm.length>3?nm.slice(0,3)+'...':nm;
-    lb+='<text x="'+lx(i).toFixed(1)+'" y="'+(py2-14)+'" text-anchor="middle" font-size="'+(n>10?7.5:9.5)+'" fill="'+NAVY+'" font-weight="700" font-family="inherit">'+esc(nm2)+'</text>';
+    lb+='<text x="'+lx(i).toFixed(1)+'" y="'+(ch-py2+36)+'" text-anchor="middle" font-size="'+(n>10?7.5:9.5)+'" fill="'+NAVY+'" font-weight="700" font-family="inherit">'+esc(nm2)+'</text>';
     var wi=wdc.indexOf(i),isW=(wi!==-1);
-    ci+='<circle cx="'+lx(i).toFixed(1)+'" cy="'+(ch-py2+16)+'" r="13" fill="'+(isW?WC[wi]:'#F3F4F6')+'" stroke="'+(isW?WC[wi]:'#D1D5DB')+'" stroke-width="1.5"/>';
+    ci+='<circle cx="'+lx(i).toFixed(1)+'" cy="'+(py2-16)+'" r="13" fill="'+(isW?WC[wi]:'#F3F4F6')+'" stroke="'+(isW?WC[wi]:'#D1D5DB')+'" stroke-width="1.5"/>';
     var sym=isW?'&#127873;':'&#10005;';
-    ci+='<text x="'+lx(i).toFixed(1)+'" y="'+(ch-py2+20)+'" text-anchor="middle" font-size="13" fill="'+(isW?'#fff':'#9CA3AF')+'" font-family="inherit">'+sym+'</text>';
+    ci+='<text x="'+lx(i).toFixed(1)+'" y="'+(py2-12)+'" text-anchor="middle" font-size="13" fill="'+(isW?'#fff':'#9CA3AF')+'" font-family="inherit">'+sym+'</text>';
   }
   for(var j=0;j<hs.length;j++){hl+='<line x1="'+lx(hs[j].c).toFixed(1)+'" y1="'+ly(hs[j].r+.5).toFixed(1)+'" x2="'+lx(hs[j].c+1).toFixed(1)+'" y2="'+ly(hs[j].r+.5).toFixed(1)+'" stroke="#D1D5DB" stroke-width="2.5"/>';}
-  var svg='<svg id="lsvg" width="'+cw+'" height="'+ch+'" style="border-radius:12px;background:#fff;border:1px solid #E8EDF5;display:block">'+vl+hl+lb+ci+'<g id="lpg"></g></svg>';
+  var svg='<svg id="lsvg" width="'+cw+'" height="'+ch+'" style="overflow:visible;border-radius:12px;background:#fff;border:1px solid #E8EDF5;display:block">'+vl+hl+lb+ci+'<g id="lpg"></g></svg>';
   var hostIcon=isHost?'&#128081;':'&#128242;';
   return '<div style="min-height:100vh;display:flex;flex-direction:column">'
     +'<div class="top"><span style="color:#fff;font-weight:900;font-size:15px">'+hostIcon+' &#129692; \uc0ac\ub2e4\ub9ac\ud0c0\uae30</span>'+dot()+'</div>'
@@ -503,15 +503,16 @@ function startLadderAnim(){
   if(!pg||!ra)return;
   var n=ST.ladderN,hs=ST.ladderHs,wdc=ST.ladderWdc,dests=ST.ladderDests,picked=ST.winners;
   if(!n||!hs||!wdc||!dests||!picked)return;
-  var cw=Math.min(500,Math.max(260,n*50)),ch=390,px2=28,py2=44;
+  var cw=Math.min(500,Math.max(260,n*50)),ch=420,px2=28,py2=52;
   function lx(col){return px2+col*(cw-px2*2)/Math.max(n-1,1);}
   function ly(row){return py2+row*(ch-py2*2)/LR;}
   var AD=4500,DL=1800;
   wdc.forEach(function(dc,i){
     var si=dests.indexOf(dc),pts=bldPath(si,hs,lx,ly),len=Math.ceil(pthLen(pts))+10;
     setTimeout(function(){
+      var ptsR=pts.slice().reverse();
       var path=document.createElementNS('http://www.w3.org/2000/svg','path');
-      path.setAttribute('d',pthD(pts));path.setAttribute('fill','none');
+      path.setAttribute('d',pthD(ptsR));path.setAttribute('fill','none');
       path.setAttribute('stroke',WC[i]);path.setAttribute('stroke-width','5');
       path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');
       path.setAttribute('stroke-dasharray',len);path.setAttribute('stroke-dashoffset',len);
@@ -534,6 +535,20 @@ function startLadderAnim(){
 function hostDone(){ST=merge(ST,{ph:'done'});bcast();paint();}
 
 
+
+var _partSlotTim=null;
+function startPartSlot(){
+  clearInterval(_partSlotTim);
+  if(!ST.parts||ST.parts.length===0)return;
+  _partSlotTim=setInterval(function(){
+    if(ST.ph!=='draw'){clearInterval(_partSlotTim);return;}
+    var ns=ST.slots.map(function(s,i){
+      return ST.locked[i]?s:ST.parts[Math.floor(Math.random()*ST.parts.length)]||'?';
+    });
+    ST=merge(ST,{slots:ns});
+    paint();
+  },170);
+}
 function setNumWin(n){ST=merge(ST,{numWin:n});bcast();paint();}
 function goMethod() {
   if (ST.parts.length < ST.numWin) return;
